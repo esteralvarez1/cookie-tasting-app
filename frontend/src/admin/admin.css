@@ -1,0 +1,393 @@
+/* ----------------------------------------------------------------
+   Admin panel styles — prefijo admin- para evitar colisiones con
+   los estilos del participante definidos en styles.css
+---------------------------------------------------------------- */
+
+/* Shell */
+.admin-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #f4f5f7;
+  color: #1a1a2e;
+}
+
+/* Nav */
+.admin-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 1.5rem;
+  height: 52px;
+  background: #1a1a2e;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.admin-nav-brand {
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+  margin-right: auto;
+  color: #fff;
+}
+
+.admin-nav-link {
+  color: #b0b8cc;
+  text-decoration: none;
+  font-size: 0.88rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 5px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.admin-nav-link:hover,
+.admin-nav-link.active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.admin-nav-logout {
+  margin-top: 0;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #b0b8cc;
+  cursor: pointer;
+  padding: 0.35rem 0.75rem;
+  border-radius: 5px;
+  font-size: 0.88rem;
+  transition: background 0.15s, color 0.15s;
+}
+
+.admin-nav-logout:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+/* Main content */
+.admin-main {
+  flex: 1;
+  padding: 2rem 1.5rem;
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+/* ---- Login ---- */
+.admin-login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: #f4f5f7;
+}
+
+.admin-login-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 2.5rem;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.09);
+}
+
+.admin-login-card h1 {
+  font-size: 1.45rem;
+  margin: 0 0 0.2rem;
+}
+
+.admin-subtitle {
+  color: #666;
+  font-size: 0.88rem;
+  margin: 0 0 1.75rem;
+}
+
+.admin-login-card label {
+  display: block;
+  font-size: 0.88rem;
+  font-weight: 500;
+  margin-bottom: 0.4rem;
+  color: #444;
+}
+
+.admin-login-card input {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  margin-bottom: 1.25rem;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.admin-login-card input:focus {
+  border-color: #1a1a2e;
+}
+
+.admin-login-card button {
+  width: 100%;
+  padding: 0.7rem;
+  background: #1a1a2e;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.admin-login-card button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---- Shared feedback ---- */
+.admin-error {
+  background: #fff0f0;
+  border: 1px solid #f5c0c0;
+  color: #c0392b;
+  padding: 0.7rem 1rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 0.88rem;
+}
+
+/* ---- Pages ---- */
+.admin-page h2 {
+  font-size: 1.45rem;
+  margin: 0 0 1.5rem;
+}
+
+/* ---- Export blocks ---- */
+.admin-export-block {
+  background: #fff;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.25rem;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.admin-export-block h3 {
+  font-size: 1.05rem;
+  margin: 0 0 0.3rem;
+}
+
+.admin-export-description {
+  color: #666;
+  font-size: 0.87rem;
+  margin: 0 0 1.25rem;
+}
+
+.admin-export-filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr 160px;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+@media (max-width: 600px) {
+  .admin-export-filters {
+    grid-template-columns: 1fr;
+  }
+}
+
+.admin-field label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-bottom: 0.3rem;
+  color: #555;
+}
+
+.admin-optional {
+  font-weight: 400;
+  color: #999;
+  font-size: 0.82rem;
+}
+
+.admin-field input,
+.admin-field select {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 0.9rem;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.15s;
+  background: #fff;
+}
+
+.admin-field input:focus,
+.admin-field select:focus {
+  border-color: #1a1a2e;
+}
+
+.admin-export-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.admin-btn-primary {
+  padding: 0.55rem 1.25rem;
+  background: #1a1a2e;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+.admin-btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.admin-btn-secondary {
+  padding: 0.55rem 1.25rem;
+  background: transparent;
+  color: #1a1a2e;
+  border: 1px solid #1a1a2e;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.admin-btn-secondary:hover {
+  background: #1a1a2e;
+  color: #fff;
+}
+
+.admin-btn-danger {
+  padding: 0.55rem 1.25rem;
+  background: transparent;
+  color: #c0392b;
+  border: 1px solid #c0392b;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.admin-btn-danger:hover:not(:disabled) {
+  background: #c0392b;
+  color: #fff;
+}
+
+.admin-btn-danger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.admin-btn-delete {
+  padding: 0.55rem 1.25rem;
+  background: #c0392b;
+  color: #fff;
+  border: 1px solid #c0392b;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+.admin-btn-delete:hover:not(:disabled) {
+  opacity: 0.82;
+}
+
+.admin-btn-delete:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.admin-field textarea {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 0.9rem;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.15s;
+  background: #fff;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.admin-field textarea:focus {
+  border-color: #1a1a2e;
+}
+
+.admin-inline-error {
+  color: #c0392b;
+  font-size: 0.88rem;
+}
+
+.admin-inline-success {
+  color: #1a8a44;
+  font-size: 0.88rem;
+}
+
+/* ---- Health page ---- */
+.admin-health-description {
+  color: #666;
+  font-size: 0.9rem;
+  margin: -0.75rem 0 1.25rem;
+}
+
+.admin-health-result {
+  margin-top: 1.5rem;
+  background: #fff;
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.admin-status-indicator {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  padding: 0.25rem 0.7rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  text-transform: uppercase;
+}
+
+.admin-status-indicator.ok {
+  background: #e6f9ee;
+  color: #1a8a44;
+}
+
+.admin-status-indicator.error {
+  background: #fff0f0;
+  color: #c0392b;
+}
+
+.admin-health-result pre {
+  background: #f7f8fa;
+  padding: 1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  margin: 0;
+  color: #2d2d2d;
+}
+
+.admin-health-error-msg {
+  color: #c0392b;
+  font-size: 0.9rem;
+  margin: 0;
+}

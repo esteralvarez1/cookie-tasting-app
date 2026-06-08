@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+from enum import Enum
+
+
+class SessionStatus(str, Enum):
+    CREATED = 'CREATED'
+    IN_PROGRESS = 'IN_PROGRESS'
+    COMPLETED = 'COMPLETED'
+    CANCELLED = 'CANCELLED'
+
+
+class EvaluationStatus(str, Enum):
+    PENDING = 'PENDING'
+    IN_PROGRESS = 'IN_PROGRESS'
+    COMPLETED = 'COMPLETED'
+    CANCELLED = 'CANCELLED'
+
+
+class EvaluationState(str, Enum):
+    INITIAL_QUESTION = 'INITIAL_QUESTION'
+    OPEN_REPROMPT = 'OPEN_REPROMPT'
+    COMPARISON_REFORMULATION = 'COMPARISON_REFORMULATION'
+    MODALITY_QUESTION = 'MODALITY_QUESTION'
+    SAMPLE_COMPLETED = 'SAMPLE_COMPLETED'
+
+
+class SpeakerType(str, Enum):
+    USER = 'USER'
+    BOT = 'BOT'
+    SYSTEM = 'SYSTEM'
+
+
+class MessageType(str, Enum):
+    INITIAL_QUESTION = 'INITIAL_QUESTION'
+    USER_RESPONSE = 'USER_RESPONSE'
+    OPEN_REPROMPT = 'OPEN_REPROMPT'
+    MODALITY_QUESTION = 'MODALITY_QUESTION'
+    COMPARISON_WARNING = 'COMPARISON_WARNING'
+    FINAL_MESSAGE = 'FINAL_MESSAGE'
+    SYSTEM_ERROR = 'SYSTEM_ERROR'
+
+
+class ModalityType(str, Enum):
+    ASPECTO = 'ASPECTO'
+    OLOR = 'OLOR'
+    TEXTURA = 'TEXTURA'
+    SABOR = 'SABOR'
+
+
+class AnalysisScope(str, Enum):
+    INITIAL = 'INITIAL'
+    INTERMEDIATE = 'INTERMEDIATE'
+    FINAL = 'FINAL'

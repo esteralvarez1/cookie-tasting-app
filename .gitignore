@@ -1,0 +1,50 @@
+# Entornos Python
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Variables de entorno / secretos
+.env
+.env.*
+!.env.example
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.vite/
+
+# Sistema operativo
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Bases de datos locales
+*.sqlite
+*.sqlite3
+*.db
+
+# Archivos temporales
+tmp/
+temp/
+
+# Zips y backups
+*.zip
+*.tar
+*.gz
+*.bak
+
+
+.claude/
+.docs/
+
