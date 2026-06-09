@@ -1,0 +1,15 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+tests/
+pytest.ini
+requirements-test.txt
+.venv/
+venv/
+.env
+.env.*
+*.egg-info/
+dist/
+build/
