@@ -140,7 +140,7 @@ LLM_BASE_URL=https://api.groq.com/openai/v1
 LLM_API_KEY=CHANGE_ME_GROQ_API_KEY
 LLM_MODEL=llama-3.1-8b-instant
 
-LLM_TIMEOUT_SECONDS=120
+LLM_TIMEOUT_SECONDS=30
 LLM_CONNECT_TIMEOUT_SECONDS=10
 LLM_MAX_RETRIES=1
 LLM_RESPONSE_FORMAT_JSON=true
@@ -209,10 +209,10 @@ Si algún servicio aparece como `exited`, revisar sus logs (ver sección 13).
 curl http://IP-DE-LA-VM/api/v1/health
 ```
 
-Respuesta esperada:
+Respuesta esperada (la API envuelve todas las respuestas en `success`/`data`/`message`):
 
 ```json
-{"status": "ok"}
+{"success": true, "data": {"status": "ok"}, "message": "Backend operativo"}
 ```
 
 ---

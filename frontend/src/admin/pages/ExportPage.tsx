@@ -26,7 +26,7 @@ const BLOCK_CONFIGS: BlockConfig[] = [
   {
     id: 'structured',
     title: 'Clasificación estructurada',
-    description: 'Análisis por modalidad con cabecera canónica de 43 columnas.',
+    description: 'Análisis por modalidad con cabecera canónica de 18 columnas.',
     endpoint: ADMIN_CONFIG.endpoints.exportStructured,
     formats: ['csv', 'json', 'xlsx'],
     defaultFormat: 'xlsx',
