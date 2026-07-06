@@ -90,6 +90,50 @@ class TestHasComparisonFunction:
         assert has_comparison('Es crujiente y dulce.') is False
 
 
+class TestHasComparisonCommercialReferences:
+    """Comparisons against commercial brands / market products."""
+
+    def test_brands_in_context_are_comparison(self):
+        assert has_comparison('Sabe como una Oreo', []) is True
+        assert has_comparison('Tiene sabor a Oreo', []) is True
+        assert has_comparison('Me recuerda a las galletas María', []) is True
+        assert has_comparison('Es tipo Chiquilín', []) is True
+        assert has_comparison('Se parece a las Campurrianas', []) is True
+        assert has_comparison('Es como una Chips Ahoy', []) is True
+        assert has_comparison('Sabe como las Digestive', []) is True
+        assert has_comparison('Me recuerda a las Tosta Rica', []) is True
+        assert has_comparison('Es parecida a las Príncipe', []) is True
+        assert has_comparison('Me recuerda a las cookies de Mercadona', []) is True
+
+    def test_market_phrases_are_comparison(self):
+        assert has_comparison('Parece una galleta del supermercado', []) is True
+        assert has_comparison('Parece una galleta comercial', []) is True
+        assert has_comparison('Sabe a galleta barata', []) is True
+        assert has_comparison('Es como una galleta industrial del mercado', []) is True
+        assert has_comparison('Parece una galleta de marca', []) is True
+
+    def test_brand_wins_over_sensory_ingredient(self):
+        # Priority rule: a brand reference beats a co-occurring ingredient word.
+        assert has_comparison('Sabe a Oreo', []) is True
+        assert has_comparison('Sabe a mantequilla', []) is False
+
+
+class TestHasComparisonSensoryFalsePositives:
+    """Sensory associations with ingredients/aromas must NOT be comparisons."""
+
+    def test_ingredient_associations_are_not_comparison(self):
+        assert has_comparison('Está demasiado dulce', []) is False
+        assert has_comparison('Tiene menos olor', []) is False
+        assert has_comparison('Tiene sabor como a mantequilla', []) is False
+        assert has_comparison('Huele como a vainilla', []) is False
+        assert has_comparison('Sabe como a caramelo', []) is False
+        assert has_comparison('Tiene aroma parecido a cacao', []) is False
+        assert has_comparison('Me recuerda a mantequilla', []) is False
+        assert has_comparison('Me recuerda a canela', []) is False
+        assert has_comparison('Parece casera', []) is False
+        assert has_comparison('Parece industrial', []) is False
+
+
 # ---------------------------------------------------------------------------
 # Integration tests via HTTP API
 # ---------------------------------------------------------------------------
@@ -245,6 +289,128 @@ class TestPurelyComparativeDoesNotCompleteModalities:
         assert data['analysis']['has_comparison'] is True
         # ASPECTO must not be complete
         assert data['analysis']['modalities']['ASPECTO']['is_complete'] is False
+
+
+class _CountingAnalyzer(FakeAnalyzer):
+    """Wraps FakeAnalyzer to count how many times the LLM analyze() is invoked."""
+
+    def __init__(self, scenario: str = FakeAnalyzer.ALL_COMPLETE) -> None:
+        super().__init__(scenario)
+        self.calls = 0
+
+    async def analyze(self, *args, **kwargs):  # type: ignore[override]
+        self.calls += 1
+        return await super().analyze(*args, **kwargs)
+
+
+class TestComparisonShortCircuitsBeforeLlm:
+    """A comparative turn must be detected before the LLM call: no analyze(), no evidence."""
+
+    def test_comparison_skips_llm_then_clean_turn_runs_it(
+        self, client, participant_session, session_headers, monkeypatch
+    ):
+        analyzer = _CountingAnalyzer(FakeAnalyzer.ALL_COMPLETE)
+        monkeypatch.setattr(service, 'analyzer', analyzer)
+        session_id = participant_session['session_id']
+        ev = client.post(
+            '/api/v1/evaluations',
+            json={'session_id': session_id, 'sample_code': 'MUESTRA_A'},
+            headers=session_headers,
+        )
+        assert ev.status_code == 201
+        eval_id = ev.json()['data']['evaluation_id']
+
+        comparison_msg = 'Por favor, describe esta galleta sin compararla con otra.'
+
+        # Turn 1 — comparative: LLM must NOT be called and nothing must complete.
+        resp1 = client.post(
+            f'/api/v1/evaluations/{eval_id}/dialog',
+            json={'user_message': 'Es más crujiente que la anterior.'},
+            headers=session_headers,
+        )
+        assert resp1.status_code == 200
+        data1 = resp1.json()['data']
+        assert data1['analysis']['has_comparison'] is True
+        assert data1['bot_message'] == comparison_msg
+        assert analyzer.calls == 0, 'No se debe llamar al LLM en un turno comparativo'
+        for modality in ('ASPECTO', 'OLOR', 'TEXTURA', 'SABOR'):
+            assert data1['analysis']['modalities'][modality]['is_complete'] is False
+
+        # Turn 2 — clean reformulation: now the LLM IS called and the flow continues.
+        resp2 = client.post(
+            f'/api/v1/evaluations/{eval_id}/dialog',
+            json={'user_message': 'Es crujiente y me gusta mucho.'},
+            headers=session_headers,
+        )
+        assert resp2.status_code == 200
+        data2 = resp2.json()['data']
+        assert data2['analysis']['has_comparison'] is False
+        assert data2['bot_message'] != comparison_msg
+        assert analyzer.calls == 1, 'El turno limpio reformulado sí debe llamar al LLM'
+
+    def test_commercial_brand_triggers_reformulation(
+        self, client, participant_session, session_headers, monkeypatch
+    ):
+        analyzer = _CountingAnalyzer(FakeAnalyzer.NORMAL)
+        monkeypatch.setattr(service, 'analyzer', analyzer)
+        session_id = participant_session['session_id']
+        ev = client.post(
+            '/api/v1/evaluations',
+            json={'session_id': session_id, 'sample_code': 'MUESTRA_A'},
+            headers=session_headers,
+        )
+        eval_id = ev.json()['data']['evaluation_id']
+
+        resp = client.post(
+            f'/api/v1/evaluations/{eval_id}/dialog',
+            json={'user_message': 'Sabe como una Oreo.'},
+            headers=session_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()['data']
+        assert data['analysis']['has_comparison'] is True
+        assert data['bot_message'] == 'Por favor, describe esta galleta sin compararla con otra.'
+        assert analyzer.calls == 0
+
+
+class TestComparisonPreservesAccumulatedExtraction:
+    """A comparative turn must NOT blank the accumulated extraction in the panel payload."""
+
+    def test_comparison_turn_keeps_previous_modalities(
+        self, client, participant_session, session_headers, monkeypatch
+    ):
+        # Turn 1: ASPECTO_COMPLETE → only ASPECTO captured, low coverage → OPEN_REPROMPT
+        # (sample stays open). Its extraction is persisted.
+        monkeypatch.setattr(service, 'analyzer', FakeAnalyzer(FakeAnalyzer.ASPECTO_COMPLETE))
+        session_id = participant_session['session_id']
+        ev = client.post(
+            '/api/v1/evaluations',
+            json={'session_id': session_id, 'sample_code': 'MUESTRA_A'},
+            headers=session_headers,
+        )
+        eval_id = ev.json()['data']['evaluation_id']
+
+        first = client.post(
+            f'/api/v1/evaluations/{eval_id}/dialog',
+            json={'user_message': 'Es dorada y redonda, me gusta como se ve.'},
+            headers=session_headers,
+        ).json()['data']
+        assert first['analysis']['modalities']['ASPECTO']['mention_text'] == 'es dorada y redonda'
+
+        # Turn 2: comparative → must NOT blank the accumulated ASPECTO extraction.
+        second = client.post(
+            f'/api/v1/evaluations/{eval_id}/dialog',
+            json={'user_message': 'Me gusta más que la anterior.'},
+            headers=session_headers,
+        ).json()['data']
+
+        assert second['analysis']['has_comparison'] is True
+        assert second['analysis']['analysis_scope'] == 'INTERMEDIATE'
+        assert second['bot_message'] == 'Por favor, describe esta galleta sin compararla con otra.'
+        aspecto = second['analysis']['modalities']['ASPECTO']
+        assert aspecto['mention_text'] == 'es dorada y redonda'
+        assert aspecto['descriptor_text'] == 'dorado, redonda'
+        assert aspecto['valuation_text'] == 'me gusta como se ve'
 
 
 class TestHistoricalComparisonDoesNotRefire:

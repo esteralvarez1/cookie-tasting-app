@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import re
+import unicodedata
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.db import get_db
 from app.core.security import require_researcher_or_admin
-from app.models.entities import Participant, SampleEvaluation, TastingSession, EvaluationAnalysis
+from app.models.entities import Participant, SampleEvaluation, TastingSession, TastingSessionConfig, EvaluationAnalysis
 from app.models.enums import EvaluationStatus, SpeakerType
 from app.services.exporters import (
     export_conversations_csv,
@@ -23,6 +27,67 @@ router = APIRouter(prefix='/export', tags=['export'])
 
 def _attachment_headers(filename: str) -> dict[str, str]:
     return {'Content-Disposition': f'attachment; filename="{filename}"'}
+
+
+def _slugify_filename_part(value: str) -> str:
+    """Normalize a free-text value into a safe, hyphenated filename fragment.
+
+    Lowercases, strips accents, turns whitespace into hyphens, drops any
+    character that is not [a-z0-9-], collapses repeated hyphens and trims
+    leading/trailing hyphens. Returns 'sesion' when nothing usable remains.
+
+    Examples:
+        'Test Cata'       -> 'test-cata'
+        'Cata Junio 2026' -> 'cata-junio-2026'
+        'Sesión María'    -> 'sesion-maria'
+        ''                -> 'sesion'
+    """
+    normalized = unicodedata.normalize('NFKD', value or '')
+    without_accents = ''.join(ch for ch in normalized if not unicodedata.combining(ch))
+    lowered = without_accents.lower()
+    # Whitespace becomes a hyphen; everything not [a-z0-9-] is dropped.
+    hyphenated = re.sub(r'\s+', '-', lowered)
+    cleaned = re.sub(r'[^a-z0-9-]', '', hyphenated)
+    collapsed = re.sub(r'-+', '-', cleaned).strip('-')
+    return collapsed or 'sesion'
+
+
+def _iso_export_date() -> str:
+    """Current date in ISO format, e.g. '2026-06-13'."""
+    return datetime.now().strftime('%Y-%m-%d')
+
+
+def _build_export_filename(export_type: str, session_title: str | None, extension: str) -> str:
+    """Compose '<export_type>_<session_slug>_<YYYY-MM-DD>.<extension>'.
+
+    The three parts are joined with underscores; the session name uses a
+    hyphenated slug, so e.g. 'clasificacion-estructurada_test-cata_2026-06-13.csv'.
+    """
+    session_slug = _slugify_filename_part(session_title or '')
+    return f'{export_type}_{session_slug}_{_iso_export_date()}.{extension}'
+
+
+def _resolve_session_title(
+    db: Session,
+    session_id: str | None,
+    participant_code: str | None,
+    tasting_session_config_id: str | None,
+) -> str | None:
+    """Best-effort resolution of the tasting session title for the filename.
+
+    Resolves from the most specific unambiguous filter available. A bare
+    participant_code may span several tasting sessions, so it is left as None
+    and the filename falls back to 'sesion'.
+    """
+    if tasting_session_config_id:
+        config = db.get(TastingSessionConfig, tasting_session_config_id)
+        return config.title if config else None
+    if session_id:
+        session = db.get(TastingSession, session_id)
+        if session and session.admin_session_id:
+            config = db.get(TastingSessionConfig, session.admin_session_id)
+            return config.title if config else None
+    return None
 
 
 def _require_export_filter(session_id: str | None, participant_code: str | None, tasting_session_config_id: str | None) -> None:
@@ -60,6 +125,7 @@ def _query_evaluations(
 def export_conversations(format: str = Query('csv'), session_id: str | None = None, participant_code: str | None = None, tasting_session_config_id: str | None = None, db: Session = Depends(get_db)):
     _require_export_filter(session_id, participant_code, tasting_session_config_id)
     evaluations = _query_evaluations(db, session_id, participant_code, tasting_session_config_id)
+    session_title = _resolve_session_title(db, session_id, participant_code, tasting_session_config_id)
     if format == 'json':
         payload = []
         for evaluation in evaluations:
@@ -76,15 +142,23 @@ def export_conversations(format: str = Query('csv'), session_id: str | None = No
                     'message_text': turn.message_text,
                     'created_at': turn.created_at.isoformat(),
                 })
-        return {'success': True, 'data': payload, 'message': 'Exportación de conversación generada'}
+        return JSONResponse(
+            content={'success': True, 'data': payload, 'message': 'Exportación de conversación generada'},
+            headers=_attachment_headers(_build_export_filename('conversacion-completa', session_title, 'json')),
+        )
     csv_text = export_conversations_csv(evaluations)
-    return PlainTextResponse(csv_text, media_type='text/csv', headers=_attachment_headers('conversations_export.csv'))
+    return PlainTextResponse(
+        csv_text,
+        media_type='text/csv',
+        headers=_attachment_headers(_build_export_filename('conversacion-completa', session_title, 'csv')),
+    )
 
 
 @router.get('/user-responses', dependencies=[Depends(require_researcher_or_admin)])
 def export_user_responses(format: str = Query('csv'), session_id: str | None = None, participant_code: str | None = None, tasting_session_config_id: str | None = None, db: Session = Depends(get_db)):
     _require_export_filter(session_id, participant_code, tasting_session_config_id)
     evaluations = _query_evaluations(db, session_id, participant_code, tasting_session_config_id)
+    session_title = _resolve_session_title(db, session_id, participant_code, tasting_session_config_id)
     if format == 'json':
         payload = []
         for evaluation in evaluations:
@@ -101,24 +175,39 @@ def export_user_responses(format: str = Query('csv'), session_id: str | None = N
                     'message_text': turn.message_text,
                     'created_at': turn.created_at.isoformat(),
                 })
-        return {'success': True, 'data': payload, 'message': 'Exportación de respuestas del usuario generada'}
+        return JSONResponse(
+            content={'success': True, 'data': payload, 'message': 'Exportación de respuestas del usuario generada'},
+            headers=_attachment_headers(_build_export_filename('respuestas-usuario', session_title, 'json')),
+        )
     csv_text = export_user_responses_csv(evaluations)
-    return PlainTextResponse(csv_text, media_type='text/csv', headers=_attachment_headers('user_responses_export.csv'))
+    return PlainTextResponse(
+        csv_text,
+        media_type='text/csv',
+        headers=_attachment_headers(_build_export_filename('respuestas-usuario', session_title, 'csv')),
+    )
 
 
 @router.get('/structured', dependencies=[Depends(require_researcher_or_admin)])
 def export_structured(format: str = Query('csv'), session_id: str | None = None, participant_code: str | None = None, tasting_session_config_id: str | None = None, db: Session = Depends(get_db)):
     _require_export_filter(session_id, participant_code, tasting_session_config_id)
     evaluations = [item for item in _query_evaluations(db, session_id, participant_code, tasting_session_config_id) if item.status == EvaluationStatus.COMPLETED.value]
+    session_title = _resolve_session_title(db, session_id, participant_code, tasting_session_config_id)
     if format == 'json':
         payload = [structured_row_to_api_dict(row) for row in export_structured_rows(evaluations)]
-        return {'success': True, 'data': payload, 'message': 'Exportación estructurada generada'}
+        return JSONResponse(
+            content={'success': True, 'data': payload, 'message': 'Exportación estructurada generada'},
+            headers=_attachment_headers(_build_export_filename('clasificacion-estructurada', session_title, 'json')),
+        )
     if format == 'xlsx':
         workbook_bytes = export_structured_xlsx(evaluations)
         return Response(
             content=workbook_bytes,
             media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            headers={'Content-Disposition': 'attachment; filename=structured_export.xlsx'},
+            headers=_attachment_headers(_build_export_filename('clasificacion-estructurada', session_title, 'xlsx')),
         )
     csv_text = export_structured_csv(evaluations)
-    return PlainTextResponse(csv_text, media_type='text/csv', headers=_attachment_headers('structured_export.csv'))
+    return PlainTextResponse(
+        csv_text,
+        media_type='text/csv',
+        headers=_attachment_headers(_build_export_filename('clasificacion-estructurada', session_title, 'csv')),
+    )

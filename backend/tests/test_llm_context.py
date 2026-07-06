@@ -253,29 +253,35 @@ class TestShortContextualResponse:
         from app.api.routes.evaluations import service
         from tests.fakes import FakeAnalyzer
 
-        # First turn: NORMAL → FlowDecisionEngine will ask about first pending modality
+        eval_id = evaluation['evaluation_id']
         monkeypatch.setattr(service, 'analyzer', FakeAnalyzer(FakeAnalyzer.NORMAL))
-        resp1 = client.post(
-            f'/api/v1/evaluations/{evaluation["evaluation_id"]}/dialog',
+        # Turn 1 (INITIAL): 0 complete → vague → open reprompt.
+        client.post(
+            f'/api/v1/evaluations/{eval_id}/dialog',
             json={'user_message': 'Está dorada y crujiente, huele bien, sabor dulce'},
             headers=session_headers,
         )
-        assert resp1.status_code == 200
-        assert resp1.json()['data']['current_state'] == 'MODALITY_QUESTION'
-
-        # Second turn: FakeAnalyzer returns VAGUE, but state is now MODALITY_QUESTION
-        monkeypatch.setattr(service, 'analyzer', FakeAnalyzer(FakeAnalyzer.VAGUE))
+        # Turn 2 (intermediate): proceeds to the first modality question.
         resp2 = client.post(
-            f'/api/v1/evaluations/{evaluation["evaluation_id"]}/dialog',
+            f'/api/v1/evaluations/{eval_id}/dialog',
+            json={'user_message': 'Está dorada y crujiente, huele bien, sabor dulce'},
+            headers=session_headers,
+        )
+        assert resp2.json()['data']['current_state'] == 'MODALITY_QUESTION'
+
+        # Turn 3: FakeAnalyzer returns VAGUE, but state is MODALITY_QUESTION.
+        monkeypatch.setattr(service, 'analyzer', FakeAnalyzer(FakeAnalyzer.VAGUE))
+        resp3 = client.post(
+            f'/api/v1/evaluations/{eval_id}/dialog',
             json={'user_message': 'Sí, me gusta'},
             headers=session_headers,
         )
-        assert resp2.status_code == 200
-        data2 = resp2.json()['data']
-        # is_vague must be False — suppressed by step 7c in dialogue.py
-        assert data2['analysis']['is_vague'] is False
-        # Bot must NOT have sent the open reprompt message
-        assert data2['bot_message'] != OPEN_REPROMPT
+        assert resp3.status_code == 200
+        data3 = resp3.json()['data']
+        # is_vague must be False — MODALITY_QUESTION turns are never vague.
+        assert data3['analysis']['is_vague'] is False
+        # Bot must NOT have sent the open reprompt message.
+        assert data3['bot_message'] != OPEN_REPROMPT
 
 
 # ---------------------------------------------------------------------------

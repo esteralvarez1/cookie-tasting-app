@@ -8,6 +8,14 @@ Esta versión utiliza **Groq** como proveedor LLM externo para validar el flujo 
 
 La integración con modelos locales mediante `transformers` se realizará en una fase posterior y no está incluida en este documento.
 
+> **Actualización:** la integración del modelo local `salamandra-2b-instruct` con
+> `transformers` sobre CPU, servido por el servicio interno `salamandra-api`
+> (OpenAI-compatible, sin GPU ni APIs externas), ya está disponible. Consulta la guía
+> dedicada **[DEPLOYMENT_SALAMANDRA_LOCAL.md](DEPLOYMENT_SALAMANDRA_LOCAL.md)**. Este
+> documento sigue siendo válido para el despliegue base; para el modelo local usa
+> `docker-compose.prod.yml` (que ya incluye el servicio `salamandra-api`) y el `.env.prod`
+> configurado como en esa guía.
+
 ---
 
 ## 2. Arquitectura de despliegue

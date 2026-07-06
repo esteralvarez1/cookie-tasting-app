@@ -21,6 +21,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
+    # Expose Content-Disposition so the browser can read the server-provided
+    # download filename on cross-origin export responses.
+    expose_headers=['Content-Disposition'],
 )
 app.include_router(api_router)
 

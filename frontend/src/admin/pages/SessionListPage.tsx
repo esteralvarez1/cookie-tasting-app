@@ -76,7 +76,7 @@ export default function SessionListPage() {
   }
 
   function buildParticipantUrl(token: string) {
-    return `${window.location.origin}/?token=${token}`;
+    return `${window.location.origin}/cata?token=${token}`;
   }
 
   return (

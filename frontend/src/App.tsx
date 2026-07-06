@@ -331,10 +331,10 @@ export default function App() {
   const completedCount = tastingSession ? tastingSession.total_samples - pendingCodes.length : 0
 
   return (
-    <div className={phase === 'conversation' ? 'page page--chat' : 'page'}>
+    <div className={phase === 'conversation' ? 'page page--conversation' : 'page'}>
       <div className="container">
         <header className="hero">
-          <h1>Cata conversacional de galletas</h1>
+          <img src="/logo_final.png" alt="SensIABot" className="hero-logo" />
           {tastingSession?.title && <p>{tastingSession.title}</p>}
         </header>
 
@@ -373,60 +373,63 @@ export default function App() {
         )}
 
         {phase === 'sample_selection' && session && tastingSession && (
-          <section className="card">
+          <section className="card sample-selection">
             <h2>Siguiente muestra</h2>
-            <p style={{ color: '#4b5563', fontSize: '0.95rem', marginBottom: '0.25rem' }}>
+            <p className="sample-selection-count">
               Muestra {completedCount + 1} de {tastingSession.total_samples}
             </p>
             <label>¿Qué muestra vas a probar ahora?</label>
-            <select
-              value={selectedSampleCode}
-              onChange={(e) => setSelectedSampleCode(e.target.value)}
-            >
-              {pendingCodes.map((code) => (
-                <option key={code} value={code}>{code}</option>
-              ))}
-            </select>
-            <button
-              disabled={loading || !selectedSampleCode}
-              onClick={() => startEvaluation(selectedSampleCode)}
-            >
-              {loading ? 'Iniciando...' : 'Empezar esta muestra'}
-            </button>
+            <div className="sample-selection-row">
+              <select
+                value={selectedSampleCode}
+                onChange={(e) => setSelectedSampleCode(e.target.value)}
+              >
+                {pendingCodes.map((code) => (
+                  <option key={code} value={code}>{code}</option>
+                ))}
+              </select>
+              <button
+                disabled={loading || !selectedSampleCode}
+                onClick={() => startEvaluation(selectedSampleCode)}
+              >
+                {loading ? 'Iniciando...' : 'Comenzar cata'}
+              </button>
+            </div>
           </section>
         )}
 
         {phase === 'conversation' && evaluation && (
           <section className="card">
-            <div className="progress-row">
-              <span>
-                Muestra {evaluation.presentation_order}
-                {tastingSession && tastingSession.total_samples > 1 ? ` de ${tastingSession.total_samples}` : ''}
-              </span>
-              <strong>{evaluation.sample_code}</strong>
+            <div className="sample-header">
+              <span><strong>Muestra:</strong> {evaluation.sample_code}</span>
+              <span><strong>Orden:</strong> {evaluation.presentation_order}</span>
+              <span><strong>Estado:</strong> {evaluation.current_state}</span>
             </div>
             <div className="chat-box">
               {turns.map((turn) => (
                 <div key={turn.turn_index} className={`bubble ${turn.speaker === 'USER' ? 'user' : 'bot'}`}>
-                  <div className="bubble-role">{turn.speaker === 'USER' ? 'Tú' : 'Asistente'}</div>
+                  <div className="bubble-role">{turn.speaker === 'USER' ? 'USER' : 'BOT'}</div>
                   <div>{turn.message_text}</div>
                 </div>
               ))}
               <div ref={messagesEndRef} />
             </div>
-            <div className="chat-input-area">
-              <label>Tu respuesta</label>
-              <textarea
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                rows={4}
-                placeholder="Escribe aquí tu respuesta..."
-              />
-              <div className="actions">
-                <button disabled={loading || !message.trim()} onClick={handleSendMessage}>
-                  {loading ? 'Enviando...' : 'Enviar respuesta'}
-                </button>
-              </div>
+          </section>
+        )}
+
+        {phase === 'conversation' && evaluation && (
+          <section className="card response-card">
+            <label>Tu respuesta</label>
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              rows={5}
+              placeholder="Escribe aquí tu respuesta..."
+            />
+            <div className="actions">
+              <button disabled={loading || !message.trim()} onClick={handleSendMessage}>
+                {loading ? 'Enviando...' : 'Enviar'}
+              </button>
             </div>
           </section>
         )}
@@ -474,7 +477,7 @@ export default function App() {
                   fontSize: '1rem',
                 }}
               >
-                Siguiente enlace
+                Enlace para rellenar el cuestionario
               </a>
             )}
           </section>

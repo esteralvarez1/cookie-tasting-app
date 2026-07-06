@@ -42,7 +42,7 @@ export default function TastingSessionPage() {
   }
 
   if (created) {
-    const participantUrl = `${window.location.origin}/?token=${created.public_token}`;
+    const participantUrl = `${window.location.origin}/cata?token=${created.public_token}`;
     return (
       <div className="admin-page">
         <h2>Sesión creada</h2>

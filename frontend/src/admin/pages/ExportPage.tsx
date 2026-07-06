@@ -82,6 +82,7 @@ export default function ExportPage() {
 
     try {
       const response = await fetchExport(config.endpoint, key, params);
+      // The backend sets the authoritative filename via Content-Disposition.
       await triggerDownload(response, buildFallbackFilename(config.id, block.format));
       updateBlock(config.id, { loading: false, success: 'Archivo descargado correctamente.' });
     } catch (err) {

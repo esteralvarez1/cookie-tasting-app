@@ -39,6 +39,7 @@ class FakeAnalyzer(BaseAnalyzer):
     COMPARISON = 'comparison'
     ALL_COMPLETE = 'all_complete'
     ASPECTO_PARTIAL = 'aspecto_partial'
+    ASPECTO_COMPLETE = 'aspecto_complete'
     NORMAL = 'normal'
     SABOR_PARTIAL = 'sabor_partial'
     TEXTURA_PARTIAL = 'textura_partial'
@@ -98,6 +99,23 @@ class FakeAnalyzer(BaseAnalyzer):
                 is_vague=False,
                 has_comparison=False,
                 reasoning_summary='ASPECTO parcialmente cubierto',
+                modalities=mods,
+            )
+        if self.scenario == self.ASPECTO_COMPLETE:
+            # Only ASPECTO is complete; the other three are empty. Used to verify that a
+            # covered modality is preserved across later MODALITY_QUESTION turns.
+            mods = _empty_modalities()
+            mods['ASPECTO'] = ModalityResult(
+                mention_text='es dorada y redonda',
+                descriptor_text='dorado, redonda',
+                valuation_text='me gusta como se ve',
+                is_complete=True,
+            )
+            return AnalysisResult(
+                analysis_scope=analysis_scope,
+                is_vague=False,
+                has_comparison=False,
+                reasoning_summary='ASPECTO completo',
                 modalities=mods,
             )
         if self.scenario == self.SABOR_PARTIAL:

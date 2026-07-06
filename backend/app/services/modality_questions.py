@@ -3,12 +3,12 @@ from __future__ import annotations
 from app.services.modality_metadata import MODALITY_LABELS, infer_question_needs
 
 INITIAL_QUESTION = (
-    'Prueba la galleta que tienes delante y danos tu opinión de manera escrita. '
-    'Es importante que escribas todo lo que pienses sobre la galleta: '
-    'Si te gusta o no. '
-    'Lo que te gusta de la galleta. '
-    'Lo que no te gusta de la galleta. '
-    'Qué te parecen sus características sensoriales como la textura, el aspecto, el sabor y el olor. '
+    'Prueba la galleta que tienes delante y danos tu opinión de manera escrita.\n'
+    'Es importante que escribas todo lo que pienses sobre la galleta:\n'
+    'Si te gusta o no.\n'
+    'Lo que te gusta de la galleta.\n'
+    'Lo que no te gusta de la galleta.\n'
+    'Qué te parecen sus características sensoriales como la textura, el aspecto, el sabor y el olor.\n'
     'En resumen, danos tu opinión de la manera más detallada posible.'
 )
 

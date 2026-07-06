@@ -44,6 +44,16 @@ temp/
 *.gz
 *.bak
 
+# Modelos locales (Salamandra) y cachés de Hugging Face
+models/
+/models/
+*.safetensors
+*.bin
+*.gguf
+*.pth
+.cache/huggingface/
+huggingface/
+
 
 .claude/
 .docs/

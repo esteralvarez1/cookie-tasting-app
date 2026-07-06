@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -50,7 +50,20 @@ class Settings(BaseSettings):
     # the backend automatically falls back to RuleBasedAnalyzer so participants can
     # continue the tasting without interruption.  Set to False to disable the fallback
     # and let AnalyzerUnavailableError propagate to the caller.
-    llm_fallback_to_rules: bool = True
+    # Acepta tanto LLM_FALLBACK_TO_RULES (nombre histórico) como LLM_FALLBACK_ENABLED
+    # (usado en la configuración del despliegue Salamandra local). Ambos son equivalentes.
+    llm_fallback_to_rules: bool = Field(
+        default=True,
+        validation_alias=AliasChoices('LLM_FALLBACK_TO_RULES', 'LLM_FALLBACK_ENABLED'),
+    )
+
+    # Límite de tokens de salida enviado al proveedor en cada petición.
+    # Obligatorio para Ollama/CPU: sin max_tokens la generación es demasiado lenta.
+    llm_max_tokens: int = 320
+    # Perfil de prompt del sistema: 'default' (Groq/OpenAI) o 'salamandra_compact' (Ollama).
+    llm_prompt_profile: str = 'default'
+    # Reparación estructural del JSON devuelto por el modelo antes de fallar.
+    llm_json_repair_enabled: bool = True
 
     admin_api_key: str = 'change-me'
     researcher_api_key: str = 'change-me-researcher'

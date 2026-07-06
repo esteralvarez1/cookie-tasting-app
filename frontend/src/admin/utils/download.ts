@@ -1,4 +1,7 @@
 export async function triggerDownload(response: Response, fallbackFilename: string): Promise<void> {
+  // The backend is the source of truth for the filename: read it from
+  // Content-Disposition. Only fall back to a client-side name when the header
+  // is absent (the backend always sets it for exports).
   const disposition = response.headers.get('content-disposition') ?? '';
   const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
   const filename = match ? match[1].replace(/['"]/g, '').trim() : fallbackFilename;

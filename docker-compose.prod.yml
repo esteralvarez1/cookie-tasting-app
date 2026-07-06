@@ -25,8 +25,33 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     expose:
       - "8000"
+
+  # Servicio interno OpenAI-compatible que sirve el modelo local Salamandra en CPU.
+  # NO se publica públicamente: solo `expose` (red interna Docker). El backend lo
+  # consume en http://salamandra-api:8001/v1.
+  salamandra-api:
+    profiles:
+      - experimental
+    build:
+      context: ./salamandra-api
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      SALAMANDRA_MODEL_PATH: /models/salamandra-2b-instruct
+      SALAMANDRA_API_KEY: ${SALAMANDRA_API_KEY}
+      SALAMANDRA_MAX_NEW_TOKENS: 700
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      # Modelo descargado previamente en la VM (solo lectura). Ver scripts/download_salamandra.sh
+      - /opt/sensia/models/salamandra-2b-instruct:/models/salamandra-2b-instruct:ro
+    expose:
+      - "8001"
 
   frontend:
     build:

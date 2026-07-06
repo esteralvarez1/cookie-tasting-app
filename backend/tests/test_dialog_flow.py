@@ -132,10 +132,18 @@ class TestModalityQuestionFlow:
     def test_partial_analysis_leads_to_modality_question(
         self, client, evaluation, session_headers, monkeypatch
     ):
-        """A normal (non-vague) answer with no modality complete should trigger ASPECTO question
-        (first modality in MODALITY_ORDER)."""
+        """A non-vague answer with no modality complete should trigger the ASPECTO question.
+
+        With the coverage-based vagueness rule, an INITIAL answer that completes <= 2
+        modalities is vague and triggers one open reprompt first; the next turn
+        (intermediate) then proceeds to the first modality question.
+        """
         monkeypatch.setattr(service, 'analyzer', FakeAnalyzer(FakeAnalyzer.NORMAL))
         eval_id = evaluation['evaluation_id']
+        # Turn 1 (INITIAL): 0 complete → vague → open reprompt.
+        warmup = _send_dialog(client, eval_id, session_headers, message=_RICH_MESSAGE)
+        assert warmup['bot_message'] == OPEN_REPROMPT
+        # Turn 2 (intermediate): not vague → first modality question.
         data = _send_dialog(client, eval_id, session_headers, message=_RICH_MESSAGE)
 
         assert data['current_state'] == EvaluationState.MODALITY_QUESTION.value
@@ -148,6 +156,10 @@ class TestModalityQuestionFlow:
         """ASPECTO with mention+descriptor but no valuation should ask for valuation."""
         monkeypatch.setattr(service, 'analyzer', FakeAnalyzer(FakeAnalyzer.ASPECTO_PARTIAL))
         eval_id = evaluation['evaluation_id']
+        # Turn 1 (INITIAL): only ASPECTO partially covered → vague → open reprompt.
+        warmup = _send_dialog(client, eval_id, session_headers)
+        assert warmup['bot_message'] == OPEN_REPROMPT
+        # Turn 2 (intermediate): proceeds to the ASPECTO valuation question.
         data = _send_dialog(client, eval_id, session_headers)
 
         assert data['current_modality'] == 'ASPECTO'

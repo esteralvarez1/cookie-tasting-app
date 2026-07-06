@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import unicodedata
 from typing import Any
 
 import httpx
@@ -218,6 +219,124 @@ SABOR:
 """
 
 
+# Prompt compacto para modelos pequeños servidos por Ollama (Salamandra-2B GGUF).
+# Se activa con LLM_PROMPT_PROFILE=salamandra_compact. El SYSTEM_PROMPT completo se
+# mantiene intacto para default/Groq.
+SYSTEM_PROMPT_SALAMANDRA_COMPACT = """Eres un extractor JSON para cata de galletas.
+Devuelve SOLO JSON válido.
+No escribas texto antes ni después.
+No uses markdown.
+
+El JSON debe tener EXACTAMENTE esta estructura:
+{
+  "analysis_scope": "",
+  "is_vague": false,
+  "has_comparison": false,
+  "reasoning_summary": "",
+  "modalities": {
+    "ASPECTO": {
+      "mention_text": "",
+      "descriptor_text": "",
+      "valuation_text": "",
+      "is_complete": false
+    },
+    "OLOR": {
+      "mention_text": "",
+      "descriptor_text": "",
+      "valuation_text": "",
+      "is_complete": false
+    },
+    "TEXTURA": {
+      "mention_text": "",
+      "descriptor_text": "",
+      "valuation_text": "",
+      "is_complete": false
+    },
+    "SABOR": {
+      "mention_text": "",
+      "descriptor_text": "",
+      "valuation_text": "",
+      "is_complete": false
+    }
+  }
+}
+
+Reglas:
+- Usa solo texto del participante.
+- No inventes.
+- Si falta una modalidad, deja sus campos vacíos.
+- ASPECTO: forma, color, tamaño, apariencia visual.
+- OLOR: olor, aroma, huele, sin olor.
+- TEXTURA: crujiente, dura, blanda, seca, migas, boronosa.
+- SABOR: sabor, sabe, dulce, vainilla, chocolate, jengibre, empalaga.
+- is_complete solo es true si mention_text, descriptor_text y valuation_text no están vacíos.
+- Devuelve siempre la clave modalities con las cuatro modalidades.
+"""
+
+
+# Internal, per-modality focus instructions appended to the DYNAMIC user prompt
+# (never to the SYSTEM_PROMPT, which stays unchanged) ONLY when the bot is asking
+# about one concrete modality (current_state == MODALITY_QUESTION). They steer the
+# LLM to analyse principally that modality. They are internal — never shown to the
+# participant — and do not change the required JSON schema (the four modalities are
+# still returned; the others simply stay empty unless the participant volunteers
+# explicit new evidence).
+MODALITY_FOCUS_INSTRUCTIONS: dict[str, str] = {
+    'ASPECTO': (
+        'El bot está preguntando por el ASPECTO. Analiza PRINCIPALMENTE la modalidad ASPECTO '
+        'a partir del ÚLTIMO MENSAJE del participante. '
+        'Céntrate en evidencias visuales: color, forma, tamaño, aspecto, presentación, superficie, '
+        'tostado, decoración y trozos visibles. '
+        'También pueden ser descriptores de ASPECTO términos como soso/sosa, simple, básico o poco '
+        'llamativo si el participante responde a una pregunta sobre el aspecto o se refiere a la '
+        'presentación visual. '
+        'No confundas la textura ni el sabor con el aspecto. '
+        'No uses el texto de la pregunta del bot como evidencia.'
+    ),
+    'OLOR': (
+        'El bot está preguntando por el OLOR. Analiza PRINCIPALMENTE la modalidad OLOR '
+        'a partir del ÚLTIMO MENSAJE del participante. '
+        'Céntrate en olor, aroma, huele, olfato. '
+        'Trata respuestas como "no huele a nada" o "sin olor" como evidencia válida de OLOR. '
+        'No clasifiques vainilla, chocolate o mantequilla como SABOR si el contexto es claramente de olor.'
+    ),
+    'TEXTURA': (
+        'El bot está preguntando por la TEXTURA. Analiza PRINCIPALMENTE la modalidad TEXTURA '
+        'a partir del ÚLTIMO MENSAJE del participante. '
+        'Céntrate en crujiente, blanda, dura, seca, arenosa, boronosa, pegajosa, se deshace, '
+        'genera migas y mordida. '
+        'No confundas un sabor dulce o intenso con la textura. '
+        'Trata las respuestas neutras o de ausencia como válidas si responden a la pregunta de textura.'
+    ),
+    'SABOR': (
+        'El bot está preguntando por el SABOR. Analiza PRINCIPALMENTE la modalidad SABOR '
+        'a partir del ÚLTIMO MENSAJE del participante. '
+        'Céntrate en sabor, sabe, gusto, dulce, amargo, salado, ácido, empalagoso, retrogusto y postgusto. '
+        'Trata "no sabe a nada" o "sin sabor" como evidencia válida de SABOR. '
+        'No clasifiques vainilla, chocolate o mantequilla como OLOR si el contexto es claramente de sabor.'
+    ),
+}
+
+
+def _modality_focus_block(current_state: str, current_modality: str | None) -> str:
+    """Return the internal focus instruction block for the dynamic user prompt.
+
+    Only active for directed modality questions; returns '' for INITIAL/global
+    turns so they keep analysing the four modalities.
+    """
+    if current_state != 'MODALITY_QUESTION' or not current_modality:
+        return ''
+    instruction = MODALITY_FOCUS_INSTRUCTIONS.get(current_modality)
+    if not instruction:
+        return ''
+    return (
+        '\n\nINSTRUCCIÓN INTERNA DE FOCO (no mostrar al participante; mantén el mismo JSON '
+        'con las cuatro modalidades):\n'
+        + instruction
+        + '\nPara las demás modalidades deja los campos vacíos en este turno.'
+    )
+
+
 class _RawModalityPayload(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
@@ -250,6 +369,161 @@ class _RawAnalysisPayload(BaseModel):
 
 
 _EXPECTED_MODALITIES: frozenset[str] = frozenset({'ASPECTO', 'OLOR', 'TEXTURA', 'SABOR'})
+
+
+# ---------------------------------------------------------------------------
+# Reparación estructural del JSON devuelto por modelos pequeños (Salamandra/Ollama).
+# NUNCA inventa contenido: solo recoloca el texto que el modelo ya devolvió.
+# ---------------------------------------------------------------------------
+
+# Claves de campo aceptadas (EN, ES y cortas) → nombre canónico.
+_REPAIR_FIELD_ALIASES: dict[str, str] = {
+    'mention_text': 'mention_text', 'mention': 'mention_text', 'mencion': 'mention_text',
+    'descriptor_text': 'descriptor_text', 'descriptor': 'descriptor_text',
+    'descripcion': 'descriptor_text',
+    'valuation_text': 'valuation_text', 'valuation': 'valuation_text',
+    'valoracion': 'valuation_text',
+}
+
+# Palabras clave para inferir la modalidad cuando el modelo devuelve un único
+# objeto {mention/descriptor/valuation} sin envolverlo en "modalities".
+_REPAIR_MODALITY_KEYWORDS: dict[str, list[str]] = {
+    'SABOR': ['sabor', 'sabe', 'dulce', 'salado', 'amargo', 'vainilla', 'chocolate',
+              'jengibre', 'azucar', 'empalaga', 'retrogusto'],
+    'OLOR': ['olor', 'huele', 'aroma', 'perfume'],
+    'TEXTURA': ['textura', 'crujiente', 'duro', 'dura', 'blando', 'blanda', 'seco',
+                'seca', 'migas', 'boronosa', 'masticar'],
+    'ASPECTO': ['aspecto', 'forma', 'color', 'redonda', 'dorada', 'tostada', 'visual',
+                'tamano', 'grande', 'pequena'],
+}
+
+
+def _repair_norm(value: str) -> str:
+    """Minúsculas sin acentos, para comparar claves/palabras de forma robusta."""
+    normalized = unicodedata.normalize('NFKD', value or '')
+    return ''.join(c for c in normalized if not unicodedata.combining(c)).lower()
+
+
+def _repair_empty_modalities() -> dict[str, dict[str, Any]]:
+    return {
+        m: {'mention_text': '', 'descriptor_text': '', 'valuation_text': '', 'is_complete': False}
+        for m in ('ASPECTO', 'OLOR', 'TEXTURA', 'SABOR')
+    }
+
+
+def _repair_base(fallback_scope: str) -> dict[str, Any]:
+    return {
+        'analysis_scope': fallback_scope,
+        'is_vague': False,
+        'has_comparison': False,
+        'reasoning_summary': '',
+        'modalities': _repair_empty_modalities(),
+    }
+
+
+def _repair_map_fields(source: dict[str, Any]) -> dict[str, str]:
+    """Extrae mention/descriptor/valuation de un dict con claves EN/ES/cortas."""
+    out = {'mention_text': '', 'descriptor_text': '', 'valuation_text': ''}
+    for key, value in source.items():
+        if not isinstance(value, str):
+            continue
+        target = _REPAIR_FIELD_ALIASES.get(_repair_norm(str(key)).strip())
+        if target and not out[target]:
+            out[target] = value.strip()
+    return out
+
+
+def _repair_infer_modality(fields: dict[str, str]) -> str | None:
+    text = _repair_norm(' '.join(fields.values()))
+    best, best_hits = None, 0
+    for modality in ('ASPECTO', 'OLOR', 'TEXTURA', 'SABOR'):
+        hits = sum(1 for kw in _REPAIR_MODALITY_KEYWORDS[modality] if kw in text)
+        if hits > best_hits:
+            best, best_hits = modality, hits
+    return best
+
+
+def _repair_extract_json(content: str) -> Any:
+    """Devuelve el primer objeto JSON entre la primera '{' y la última '}'."""
+    if not content:
+        return None
+    start = content.find('{')
+    end = content.rfind('}')
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(content[start:end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def repair_to_expected_schema(content: str, fallback_scope: str) -> dict[str, Any] | None:
+    """Reconstruye el esquema esperado a partir de un JSON con esquema incorrecto.
+
+    Casos soportados:
+      A) "modalities" presente pero con modalidades faltantes → se rellenan vacías.
+      B) "modalidades" (español) → se trata como "modalities".
+      C) objeto único {mention/descriptor/valuation} sin modalities → se infiere la
+         modalidad por palabras clave; si no se puede, se dejan todas vacías.
+      D) claves de campo en español/cortas → se mapean a *_text.
+    Nunca inventa: solo recoloca texto ya presente. Devuelve None si no hay JSON parseable.
+    """
+    data = _repair_extract_json(content)
+    if not isinstance(data, dict):
+        return None
+
+    result = _repair_base(fallback_scope)
+
+    if isinstance(data.get('is_vague'), bool):
+        result['is_vague'] = data['is_vague']
+    if isinstance(data.get('has_comparison'), bool):
+        result['has_comparison'] = data['has_comparison']
+    if isinstance(data.get('reasoning_summary'), str):
+        result['reasoning_summary'] = data['reasoning_summary'].strip()
+
+    # Casos A/B: dict de modalidades bajo "modalities" o "modalidades".
+    mods = data.get('modalities')
+    if not isinstance(mods, dict):
+        mods = data.get('modalidades')
+
+    filled_any = False
+    if isinstance(mods, dict):
+        for raw_name, raw_val in mods.items():
+            if not isinstance(raw_val, dict):
+                continue
+            name = _repair_norm(str(raw_name)).upper()
+            if name not in result['modalities']:
+                continue
+            fields = _repair_map_fields(raw_val)
+            target = result['modalities'][name]
+            for f in ('mention_text', 'descriptor_text', 'valuation_text'):
+                if fields[f]:
+                    target[f] = fields[f]
+                    filled_any = True
+
+    # Caso C/D: objeto único de una modalidad, sin envolver en "modalities".
+    if not filled_any:
+        top_fields = _repair_map_fields(data)
+        if any(top_fields.values()):
+            modality = _repair_infer_modality(top_fields)
+            if modality:
+                target = result['modalities'][modality]
+                target['mention_text'] = top_fields['mention_text']
+                target['descriptor_text'] = top_fields['descriptor_text']
+                target['valuation_text'] = top_fields['valuation_text']
+            else:
+                result['reasoning_summary'] = (
+                    'No se pudo asignar modalidad al texto devuelto por el modelo.'
+                )
+
+    # Recalcular is_complete de forma coherente con los campos recolocados.
+    for modality in result['modalities'].values():
+        modality['is_complete'] = bool(
+            modality['mention_text'].strip()
+            and modality['descriptor_text'].strip()
+            and modality['valuation_text'].strip()
+        )
+    return result
 
 
 def _build_chat_completions_url(base_url: str) -> str:
@@ -329,11 +603,18 @@ class OpenAICompatibleAnalyzer(BaseAnalyzer):
             'LLM request [mode=%s scope=%s state=%s modality=%s]:\n%s',
             settings.llm_context_mode, analysis_scope, current_state, current_modality, user_content,
         )
+        system_prompt = (
+            SYSTEM_PROMPT_SALAMANDRA_COMPACT
+            if settings.llm_prompt_profile == 'salamandra_compact'
+            else SYSTEM_PROMPT
+        )
         payload: dict[str, Any] = {
             'model': settings.llm_model,
             'temperature': 0,
+            # Obligatorio: sin max_tokens Ollama/CPU tarda demasiado.
+            'max_tokens': settings.llm_max_tokens,
             'messages': [
-                {'role': 'system', 'content': SYSTEM_PROMPT},
+                {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': user_content},
             ],
         }
@@ -476,9 +757,13 @@ class OpenAICompatibleAnalyzer(BaseAnalyzer):
         session_sample_codes: list[str] | None = None,
         other_sample_codes: list[str] | None = None,
     ) -> str:
-        """Dispatcher: routes to minimal or legacy formatter based on LLM_CONTEXT_MODE."""
+        """Dispatcher: routes to minimal or legacy formatter based on LLM_CONTEXT_MODE.
+
+        A per-modality focus block is appended for directed modality questions; the
+        SYSTEM_PROMPT is never modified and the JSON schema stays the same.
+        """
         if settings.llm_context_mode == 'legacy':
-            return self._format_user_message_legacy(
+            base = self._format_user_message_legacy(
                 analysis_scope=analysis_scope,
                 current_state=current_state,
                 current_modality=current_modality,
@@ -492,30 +777,20 @@ class OpenAICompatibleAnalyzer(BaseAnalyzer):
                 session_sample_codes=session_sample_codes,
                 other_sample_codes=other_sample_codes,
             )
-        return self._format_user_message_minimal(
-            current_state=current_state,
-            current_modality=current_modality,
-            user_last_message=user_last_message,
-            accumulated_text=accumulated_text,
-            other_sample_codes=other_sample_codes,
-            previous_bot_question=previous_bot_question,
-        )
+        else:
+            base = self._format_user_message_minimal(
+                current_state=current_state,
+                current_modality=current_modality,
+                user_last_message=user_last_message,
+                accumulated_text=accumulated_text,
+                other_sample_codes=other_sample_codes,
+                previous_bot_question=previous_bot_question,
+            )
+        return base + _modality_focus_block(current_state, current_modality)
 
     def _parse_analysis_response(self, response_json: dict[str, Any], fallback_scope: str) -> AnalysisResult:
         content = self._extract_content(response_json)
-        try:
-            raw_payload = _RawAnalysisPayload.model_validate_json(content)
-        except ValidationError as exc:
-            logger.error('LLM response failed structural validation: %s', exc)
-            raise AnalyzerUnavailableError(f'LLM response structural validation failed: {exc}') from exc
-        received = frozenset(raw_payload.modalities.keys())
-        if received != _EXPECTED_MODALITIES:
-            msg = (
-                f'Invalid modality keys in LLM response: '
-                f'expected {sorted(_EXPECTED_MODALITIES)}, got {sorted(received)}'
-            )
-            logger.error(msg)
-            raise AnalyzerUnavailableError(msg)
+        raw_payload = self._validate_or_repair(content, fallback_scope)
         modalities = self._normalize_modalities(raw_payload.modalities)
         # In minimal mode analysis_scope is not sent to the LLM, so the LLM's echo value
         # is unreliable. Always use the Python-side fallback_scope in that case.
@@ -531,6 +806,45 @@ class OpenAICompatibleAnalyzer(BaseAnalyzer):
             reasoning_summary=raw_payload.reasoning_summary,
             modalities=modalities,
         )
+
+    def _validate_or_repair(self, content: str, fallback_scope: str) -> _RawAnalysisPayload:
+        """Valida el JSON del modelo; si falla y la reparación está activada, la intenta.
+
+        Comportamiento para Groq/default sin errores: idéntico al anterior. La reparación
+        solo se activa cuando el esquema es inválido y LLM_JSON_REPAIR_ENABLED es true.
+        """
+        try:
+            raw_payload = _RawAnalysisPayload.model_validate_json(content)
+            received = frozenset(raw_payload.modalities.keys())
+            if received != _EXPECTED_MODALITIES:
+                raise ValueError(
+                    f'expected {sorted(_EXPECTED_MODALITIES)}, got {sorted(received)}'
+                )
+            return raw_payload
+        except (ValidationError, ValueError) as exc:
+            if not settings.llm_json_repair_enabled:
+                logger.error('LLM response failed structural validation: %s', exc)
+                raise AnalyzerUnavailableError(
+                    f'LLM response structural validation failed: {exc}'
+                ) from exc
+            logger.warning(
+                'Respuesta LLM con esquema inválido; activando reparación de JSON: %s', exc
+            )
+            repaired = repair_to_expected_schema(content, fallback_scope)
+            if repaired is None:
+                logger.error('Reparación de JSON fallida: contenido no parseable como objeto JSON.')
+                raise AnalyzerUnavailableError(
+                    'LLM response structural validation failed and JSON repair failed'
+                ) from exc
+            try:
+                raw_payload = _RawAnalysisPayload.model_validate(repaired)
+            except ValidationError as exc2:
+                logger.error('El JSON reparado sigue sin validar: %s', exc2)
+                raise AnalyzerUnavailableError(
+                    f'Repaired LLM response still invalid: {exc2}'
+                ) from exc2
+            logger.info('JSON reparado correctamente: %s', json.dumps(repaired, ensure_ascii=False))
+            return raw_payload
 
     def _extract_content(self, response_json: dict[str, Any]) -> str:
         content = response_json['choices'][0]['message']['content']

@@ -11,6 +11,17 @@ body { margin: 0; }
 .hero { margin-bottom: 24px; }
 .hero h1 { margin: 0 0 8px; font-size: 2rem; }
 .hero p { margin: 0; color: #4b5563; }
+.hero-logo {
+  display: block;
+  margin: 0 auto;
+  width: min(620px, 80vw);
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  background: transparent;
+}
+/* Logo algo más pequeño en la vista de conversación. */
+.page--conversation .hero-logo { width: min(420px, 70vw); }
 .card {
   background: white;
   border-radius: 20px;
@@ -46,7 +57,38 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   margin-bottom: 16px;
 }
 .success-box { border: 1px solid #bbf7d0; }
-.progress-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; color: #374151; align-items: center; }
+
+/* ── Pantalla de selección de muestra: un poco más amplia y equilibrada ───── */
+.sample-selection { padding: 32px; }
+.sample-selection h2 { font-size: 1.6rem; margin: 0 0 12px; }
+.sample-selection-count { color: #4b5563; font-size: 1.05rem; margin-bottom: 8px; }
+.sample-selection label { font-size: 1.05rem; margin: 18px 0 10px; }
+.sample-selection-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.sample-selection-row select {
+  flex: 1 1 auto;
+  min-width: 160px;
+  height: 52px;
+  padding: 0 18px;
+  font: inherit;
+  font-size: 1rem;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  background: #fff;
+}
+.sample-selection-row button {
+  flex: 0 0 auto;
+  margin-top: 0;
+  height: 52px;
+  padding: 0 28px;
+  font-size: 1rem;
+}
+
 .chat-box {
   background: #f9fafb;
   border: 1px solid #e5e7eb;
@@ -59,56 +101,44 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   overflow-y: auto;
 }
 
-/* ── Conversación: layout de altura completa ─────────────────────────────── */
-.page--chat {
+/* ── Cabecera de la muestra ──────────────────────────────────────────────── */
+.sample-header {
   display: flex;
-  flex-direction: column;
-  padding: 0;
-  height: 100vh;
-  height: 100dvh;
-  overflow: hidden;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  color: #1f2937;
+  font-size: .95rem;
 }
-.page--chat .container {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 16px;
-}
-.page--chat .hero {
-  flex-shrink: 0;
-  margin-bottom: 12px;
-}
-.page--chat .card {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  margin-bottom: 0;
-  padding: 16px;
-  overflow: hidden;
-}
-.page--chat .chat-box {
-  flex: 1;
-  min-height: 0;
-  max-height: none;
-}
-.chat-input-area {
-  flex-shrink: 0;
-  padding-top: 10px;
-  border-top: 1px solid #e5e7eb;
-  margin-top: 4px;
-}
+.sample-header strong { color: #111827; }
+
+.chat-box { max-height: 420px; }
+
+/* ── Zona de respuesta ───────────────────────────────────────────────────── */
+.response-card textarea { min-height: 120px; resize: vertical; }
+textarea:focus, input:focus { outline: none; border-color: #0f62fe; box-shadow: 0 0 0 3px rgba(15, 98, 254, 0.15); }
+
 .bubble {
   max-width: 80%;
   padding: 12px 14px;
   border-radius: 16px;
+  white-space: pre-line;
 }
 .bubble.bot { background: #e0ecff; align-self: flex-start; }
 .bubble.user { background: #dcfce7; align-self: flex-end; }
-.bubble-role { font-size: .75rem; opacity: .7; margin-bottom: 4px; }
-.actions { display: flex; flex-wrap: wrap; }
+.bubble-role {
+  font-size: .7rem;
+  font-weight: 700;
+  letter-spacing: .05em;
+  opacity: .65;
+  margin-bottom: 4px;
+}
+.actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.actions button { margin-top: 16px; }
+.actions button.secondary { margin-left: 0; }
+
 @media (max-width: 700px) {
   .card { padding: 18px; }
   .bubble { max-width: 100%; }
+  .sample-header { gap: 12px; }
 }

@@ -190,7 +190,13 @@ class TestVaguenessNotFiredForModalityQuestion:
         assert ev.status_code == 201
         eval_id = ev.json()['data']['evaluation_id']
 
-        # First turn — ASPECTO_PARTIAL drives the bot to ask for valuation
+        # Warm-up turn (INITIAL): low coverage → vague → open reprompt.
+        client.post(
+            f'/api/v1/evaluations/{eval_id}/dialog',
+            json={'user_message': 'El color dorado es muy bonito y la forma es redonda.'},
+            headers=session_headers,
+        )
+        # Next turn (intermediate) — ASPECTO_PARTIAL drives the bot to ask for valuation
         first_resp = client.post(
             f'/api/v1/evaluations/{eval_id}/dialog',
             json={'user_message': 'El color dorado es muy bonito y la forma es redonda.'},

@@ -24,44 +24,45 @@ from app.services.messages import (
 from app.services.modality_metadata import (
     DESCRIPTOR_WORDS,
     MODALITY_ORDER,
-    GENERIC_VAGUE_PATTERNS,
-    MENTION_PATTERNS,
     VALUATION_MARKERS,
+    detect_modality_absence,
     find_valuation_in_text,
     has_comparison,
-    is_global_opinion_only,
+    is_brief_valuation,
+    is_neutral_valuation,
+    mentions_other_modality_only,
     normalize_text,
+    _has_specific_modality_evidence,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _looks_clearly_vague(text: str) -> bool:
-    """Deterministic pre-filter for evidently vague inputs.
+def _compute_is_vague_from_coverage(
+    analysis_scope: str,
+    current_state: str,
+    analysis: AnalysisResult,
+) -> bool:
+    """Deterministic vagueness, decided by the backend (never by the LLM).
 
-    It ensures that generic replies such as 'está bien', 'ok' or 'me gusta'
-    always trigger the open reprompt, independently of the configured analyzer.
+    In this application 'vague' means: the INITIAL open answer does not cover
+    enough complete sensory modalities. A modality is complete only when its
+    mention_text, descriptor_text and valuation_text are all non-empty
+    (already recomputed by _normalized_analysis before this is called).
+
+    Rules:
+      - In directed modality questions (MODALITY_QUESTION) → always False.
+      - In intermediate (non-initial) turns → always False.
+      - In the INITIAL turn → True when 2 or fewer modalities are complete.
     """
-    if not text:
-        return True
-    normalized = normalize_text(text).strip()
-    if not normalized:
-        return True
-    word_count = len(_re.findall(r'\w+', normalized, flags=_re.UNICODE))
-    if word_count < 3:
-        return True
-    if any(_re.fullmatch(pattern, normalized) for pattern in GENERIC_VAGUE_PATTERNS):
-        return True
-    if is_global_opinion_only(text):
-        return True
-    has_any_mention = any(
-        _re.search(pattern, normalized)
-        for patterns in MENTION_PATTERNS.values()
-        for pattern in patterns
+    if current_state == EvaluationState.MODALITY_QUESTION.value:
+        return False
+    if analysis_scope != AnalysisScope.INITIAL.value:
+        return False
+    completed_modalities = sum(
+        1 for result in analysis.modalities.values() if result.is_complete
     )
-    if word_count < 8 and not has_any_mention:
-        return True
-    return False
+    return completed_modalities <= 2
 
 
 _NO_SMELL_PATTERNS_DIALOGUE = [
@@ -157,6 +158,28 @@ def _latest_modality_result_from_db(evaluation: SampleEvaluation, modality: str)
     return ModalityResult()
 
 
+def _is_valuation_only_response(
+    last_message: str,
+    previous_bot_question: str | None,
+    current_modality: str,
+) -> bool:
+    """True when the bot asked for a valuation and the user replied with a brief
+    opinion that adds NO new specific descriptor for the modality.
+
+    Such answers (e.g. "no me encanta", "regular", "no mucho") must only fill
+    valuation_text — never replace mention_text or descriptor_text. Returns False
+    when the answer also carries modality-specific evidence (e.g. "me gusta porque
+    es crujiente" → has a TEXTURA descriptor), so those still update normally.
+    """
+    if not _was_asking_for_valuation(previous_bot_question):
+        return False
+    if not _is_brief_response(last_message):
+        return False
+    if _has_specific_modality_evidence(last_message, current_modality):
+        return False
+    return is_brief_valuation(last_message)
+
+
 def _apply_modality_context(
     evaluation: SampleEvaluation,
     analysis: AnalysisResult,
@@ -172,6 +195,32 @@ def _apply_modality_context(
     prev = _latest_modality_result_from_db(evaluation, current_modality)
     curr = analysis.modalities.get(current_modality, ModalityResult())
 
+    # Valuation-only answer to a valuation question (general for the four modalities):
+    # keep the modality's previous mention and descriptor, fill ONLY the valuation.
+    # A short opinion like "no me encanta" must never overwrite mention_text/descriptor_text,
+    # and curr.mention_text / curr.descriptor_text from the LLM are ignored in this branch.
+    if _is_valuation_only_response(last_message, previous_bot_question, current_modality):
+        prev_mention = (prev.mention_text or '').strip()
+        prev_descriptor = (prev.descriptor_text or '').strip()
+        valuation = (curr.valuation_text or '').strip() or last_message.strip()
+        merged = ModalityResult(
+            mention_text=prev_mention,
+            descriptor_text=prev_descriptor,
+            valuation_text=valuation,
+            is_complete=bool(prev_mention and prev_descriptor and valuation),
+        )
+        updated_modalities = {**analysis.modalities, current_modality: merged}
+        return analysis.model_copy(update={'modalities': updated_modalities})
+
+    # Cross-modal guard: an answer whose sensory content belongs ONLY to another
+    # modality (e.g. "rancia" / "no sabe a nada" / "huele raro" given when the bot
+    # asked about texture) must not complete the current modality. Keep only the
+    # previously persisted evidence so the flow re-asks the current modality.
+    if mentions_other_modality_only(last_message, current_modality):
+        preserved = _normalized_modality_result(prev)
+        updated_modalities = {**analysis.modalities, current_modality: preserved}
+        return analysis.model_copy(update={'modalities': updated_modalities})
+
     # Merge: prefer new non-empty values, fallback to previous persisted values
     merged_mention = (curr.mention_text or '').strip() or (prev.mention_text or '').strip()
     merged_descriptor = (curr.descriptor_text or '').strip() or (prev.descriptor_text or '').strip()
@@ -183,6 +232,23 @@ def _apply_modality_context(
         _m_norm = normalize_text(merged_mention)
         if len(_m_norm) >= 15 and _m_norm in normalize_text(previous_bot_question):
             merged_mention = ''
+
+    # Absence / neutrality specific to the modality being asked: a valid
+    # "no huele a nada" / "no sabe a nada" / "es normal" answer resolves the
+    # descriptor for THIS modality (and a neutral valuation when none is present).
+    if not merged_descriptor:
+        absence_descriptor = detect_modality_absence(last_message, current_modality)
+        if absence_descriptor:
+            merged_descriptor = absence_descriptor
+            if not merged_valuation:
+                merged_valuation = last_message.strip()
+            if not merged_mention:
+                merged_mention = last_message.strip()
+
+    # Neutral valuation ("no tengo opinión", "me da igual") answered to a directed
+    # modality question counts as a (neutral) valuation for that modality.
+    if not merged_valuation and is_neutral_valuation(last_message):
+        merged_valuation = last_message.strip()
 
     # If valuation still missing: use last message when bot asked for valuation, response is short,
     # and it does not look like a pure sensory descriptor (e.g. "crujiente" alone).
@@ -212,6 +278,22 @@ def _apply_modality_context(
         _found_descs = [w for w in DESCRIPTOR_WORDS.get('OLOR', []) if normalize_text(w) in _lowered_last]
         if _found_descs:
             merged_descriptor = ', '.join(sorted(dict.fromkeys(_found_descs), key=normalize_text))
+
+    # Re-anchor the mention to the participant's CURRENT answer when this turn provides
+    # specific evidence for the modality being asked and we already have a descriptor.
+    # Without this, a fresh descriptor extracted from the current message could be paired
+    # with a STALE mention pulled from an earlier sentence about another modality, e.g.
+    # ASPECTO descriptor "soso, redondo" (from "es un poco soso, redondo") left with a
+    # SABOR/OLOR mention like "una galleta demasiado dulce...". The mention must describe
+    # the same evidence as the descriptor. A mention that is already a substring of the
+    # current message is kept as-is (the LLM extracted a precise span).
+    if (
+        merged_descriptor
+        and merged_mention
+        and _has_specific_modality_evidence(last_message, current_modality)
+        and normalize_text(merged_mention) not in normalize_text(last_message)
+    ):
+        merged_mention = last_message.strip()
 
     # If mention still empty but we already have descriptor or valuation context,
     # use last message as the mention anchor.
@@ -270,7 +352,7 @@ def _reset_modalities_to_empty(analysis: AnalysisResult) -> AnalysisResult:
     return analysis.model_copy(update={'modalities': empty_modalities})
 
 
-def _apply_valuation_fallback(analysis: AnalysisResult, accumulated_text: str) -> AnalysisResult:
+def _apply_valuation_fallback(analysis: AnalysisResult, accumulated_text: str, only_modality: str | None = None) -> AnalysisResult:
     """Conservative deterministic fallback: fills valuation_text when LLM left it empty.
 
     Conditions to activate for a modality:
@@ -278,11 +360,17 @@ def _apply_valuation_fallback(analysis: AnalysisResult, accumulated_text: str) -
     - valuation_text is empty
     - accumulated_text contains a literal valuation expression for that modality
 
+    When ``only_modality`` is set (directed MODALITY_QUESTION turns), only that
+    modality may be touched, so a valuation answer about one modality can never
+    fill another modality's valuation.
+
     Never invents text. Uses literal sentences from accumulated_text.
     is_complete is recomputed by the next _normalized_analysis call.
     """
     changed: dict[str, ModalityResult] = {}
     for modality, result in analysis.modalities.items():
+        if only_modality is not None and modality != only_modality:
+            continue
         if _non_empty(result.valuation_text):
             continue
         if not _non_empty(result.mention_text) or not _non_empty(result.descriptor_text):
@@ -314,6 +402,101 @@ def _normalized_analysis(analysis: AnalysisResult) -> AnalysisResult:
     for modality in MODALITY_ORDER:
         normalized_modalities.setdefault(modality, ModalityResult())
     return analysis.model_copy(update={'modalities': normalized_modalities})
+
+
+def _best_persisted_modality_result(evaluation: SampleEvaluation, modality: str) -> ModalityResult:
+    """Most reliable persisted result for a modality across ALL analyses.
+
+    Prefers the most recent COMPLETE result; otherwise the most recent non-empty
+    one; otherwise empty. Guarantees a covered modality is never lost or downgraded
+    by a later turn that returned nothing (or worse) for it.
+    """
+    if not evaluation.analyses:
+        return ModalityResult()
+    best_complete: ModalityResult | None = None
+    best_nonempty: ModalityResult | None = None
+    for analysis in sorted(evaluation.analyses, key=lambda item: item.created_at):
+        for row in analysis.modalities:
+            if row.modality != modality:
+                continue
+            result = ModalityResult(
+                mention_text=row.mention_text or '',
+                descriptor_text=row.descriptor_text or '',
+                valuation_text=row.valuation_text or '',
+                is_complete=row.is_complete,
+            )
+            if result.is_complete:
+                best_complete = result
+            if result.mention_text or result.descriptor_text or result.valuation_text:
+                best_nonempty = result
+    return best_complete or best_nonempty or ModalityResult()
+
+
+def _consolidate_modalities_for_modality_question(
+    evaluation: SampleEvaluation,
+    analysis: AnalysisResult,
+    current_modality: str,
+) -> AnalysisResult:
+    """In MODALITY_QUESTION mode, only ``current_modality`` may change this turn.
+
+    Every other modality is restored from its best persisted value, so the LLM can
+    never blank or reopen a previously covered modality, and any new data it
+    returned for a non-current modality is ignored in this mode.
+    """
+    consolidated: dict[str, ModalityResult] = {}
+    for modality in MODALITY_ORDER:
+        if modality == current_modality:
+            consolidated[modality] = analysis.modalities.get(modality, ModalityResult())
+        else:
+            consolidated[modality] = _best_persisted_modality_result(evaluation, modality)
+    return analysis.model_copy(update={'modalities': consolidated})
+
+
+def _filled_field_count(result: ModalityResult) -> int:
+    return sum(1 for value in (result.mention_text, result.descriptor_text, result.valuation_text) if (value or '').strip())
+
+
+def _merge_keep_best(primary: ModalityResult, secondary: ModalityResult) -> ModalityResult:
+    """Return whichever result preserves the most validated evidence.
+
+    A complete result always wins over an incomplete one; otherwise the one with
+    more non-empty fields wins; ties keep ``primary`` (the fresher turn).
+    """
+    primary = _normalized_modality_result(primary)
+    secondary = _normalized_modality_result(secondary)
+    if primary.is_complete and not secondary.is_complete:
+        return primary
+    if secondary.is_complete and not primary.is_complete:
+        return secondary
+    return primary if _filled_field_count(primary) >= _filled_field_count(secondary) else secondary
+
+
+def _build_consolidated_final_analysis(
+    evaluation: SampleEvaluation,
+    final_analysis: AnalysisResult | None,
+) -> AnalysisResult:
+    """Build the FINAL analysis as a CONSOLIDATION of already-validated data.
+
+    It never re-interprets the whole conversation with the LLM. Per modality it
+    keeps whichever of the persisted best result or the (already consolidated)
+    closing-turn result holds more validated evidence. A FINAL is always produced
+    so the structured export can rely on it and previously covered modalities are
+    never blanked.
+    """
+    final_modalities = final_analysis.modalities if final_analysis is not None else {}
+    modalities: dict[str, ModalityResult] = {}
+    for modality in MODALITY_ORDER:
+        persisted = _best_persisted_modality_result(evaluation, modality)
+        fresh = final_modalities.get(modality, ModalityResult())
+        modalities[modality] = _normalized_modality_result(_merge_keep_best(fresh, persisted))
+    has_comparison = bool(final_analysis.has_comparison) if final_analysis is not None else False
+    return AnalysisResult(
+        analysis_scope=AnalysisScope.FINAL.value,
+        is_vague=False,
+        has_comparison=has_comparison,
+        reasoning_summary='Análisis FINAL consolidado a partir de los datos ya validados (sin reanálisis global del LLM).',
+        modalities=modalities,
+    )
 
 
 @dataclass(frozen=True)
@@ -613,6 +796,50 @@ class DialogueService:
         self.conversation_service.add_turn(db, evaluation, SpeakerType.BOT.value, MessageType.INITIAL_QUESTION.value, INITIAL_QUESTION)
         return INITIAL_QUESTION
 
+    def _build_comparison_reformulation_outcome(
+        self, db: Session, evaluation: SampleEvaluation, analysis_scope: str
+    ) -> DialogueOutcome:
+        """Short-circuit outcome for a comparative turn detected before the LLM call.
+
+        The user turn was already stored for traceability. Here we only: increment the
+        comparison retry counter, switch the state to COMPARISON_REFORMULATION and add the
+        bot reformulation turn. No LLM call, no accumulated_text change, no analysis
+        persisted and no modality completed, so the comparative message never pollutes the
+        sensory evidence.
+
+        The returned analysis reflects the ACCUMULATED extraction (best persisted result
+        per modality), NOT an empty turn. The comparative turn contributes no new evidence,
+        but it must not blank what previous valid turns already captured — the analysis
+        panel keeps showing the conserved mention/descriptor/valuation while flagging the
+        comparison. This is the analysis of the last turn for display only; nothing is
+        persisted, so the stored per-modality extraction stays untouched.
+        """
+        evaluation.comparison_retry_count += 1
+        evaluation.current_state = EvaluationState.COMPARISON_REFORMULATION.value
+        evaluation.next_question = COMPARISON_REFORMULATION
+        self.conversation_service.add_turn(
+            db, evaluation, SpeakerType.BOT.value, MessageType.COMPARISON_WARNING.value, COMPARISON_REFORMULATION
+        )
+        db.flush()
+        accumulated_modalities = {
+            modality: _best_persisted_modality_result(evaluation, modality)
+            for modality in MODALITY_ORDER
+        }
+        comparison_analysis = AnalysisResult(
+            analysis_scope=analysis_scope,
+            is_vague=False,
+            has_comparison=True,
+            reasoning_summary='',
+            modalities=accumulated_modalities,
+        )
+        return DialogueOutcome(
+            evaluation=evaluation,
+            analysis=comparison_analysis,
+            bot_message=COMPARISON_REFORMULATION,
+            effective_next_action='ASK_REFORMULATION_NO_COMPARISON',
+            conversation_turns=self.conversation_service.serialize_turns(evaluation),
+        )
+
     async def process_user_turn(self, db: Session, evaluation: SampleEvaluation, user_message: str) -> DialogueOutcome:
         # TRANSACTIONAL CONTRACT: this method performs multiple db.flush() calls to keep
         # in-memory state consistent with pending DB changes, but it never calls db.commit().
@@ -629,24 +856,11 @@ class DialogueService:
         #2. Limpia el mensaje del usuario
         cleaned_message = user_message.strip()
 
-        #3. Guarda el turno del usuario
+        #3. Guarda el turno del usuario SIEMPRE (incluidos los comparativos): el histórico
+        # conversacional debe ser completo para trazabilidad, aunque no se use como evidencia.
         self.conversation_service.add_turn(db, evaluation, SpeakerType.USER.value, MessageType.USER_RESPONSE.value, cleaned_message)
 
-        #4. Añade el mensaje al texto acumulado
-        evaluation.accumulated_text = '\n'.join(filter(None, [evaluation.accumulated_text.strip(), cleaned_message])).strip()
-        
-        #5. Decide si el análisis es INITIAL o INTERMEDIATE
-        if not evaluation.initial_response_text:
-            evaluation.initial_response_text = cleaned_message
-            analysis_scope = AnalysisScope.INITIAL.value
-        else:
-            analysis_scope = AnalysisScope.INTERMEDIATE.value
-
-        covered_modalities = ModalityCoverageService.covered_modalities_from_latest(evaluation)
-        # Capture previous bot question before FlowDecisionEngine overwrites next_question
-        previous_bot_question = evaluation.next_question
-
-        # Derive sample context for comparison detection
+        # Derive sample context for comparison detection (needed BEFORE the LLM call)
         current_sample_code: str | None = evaluation.sample.sample_code if evaluation.sample else None
         _config = evaluation.session.admin_session if evaluation.session else None
         session_sample_codes: list[str] = (
@@ -654,6 +868,36 @@ class DialogueService:
             ([current_sample_code] if current_sample_code else [])
         )
         other_sample_codes: list[str] = [c for c in session_sample_codes if c != current_sample_code]
+
+        # Scope se deriva SIN consumir todavía initial_response_text: un primer mensaje
+        # comparativo no debe ocupar el hueco INITIAL — lo hará la respuesta reformulada.
+        analysis_scope = (
+            AnalysisScope.INITIAL.value if not evaluation.initial_response_text
+            else AnalysisScope.INTERMEDIATE.value
+        )
+
+        # 3b. Detección determinista de comparación ANTES de llamar al LLM.
+        # Si el último mensaje compara (con otra muestra, código o producto del mercado) se
+        # pide reformulación y se corta el flujo: NO se añade a accumulated_text, NO se llama
+        # al LLM, NO se evalúa vaguedad y NO se completa ninguna modalidad. El mensaje ya quedó
+        # guardado en ConversationTurn (paso 3). El tope max_comparison_retries evita el bucle
+        # infinito: al agotarse, se deja pasar al flujo normal para no bloquear al participante.
+        if (
+            has_comparison(cleaned_message, other_sample_codes)
+            and evaluation.comparison_retry_count < settings.max_comparison_retries
+        ):
+            return self._build_comparison_reformulation_outcome(db, evaluation, analysis_scope)
+
+        #4. Añade el mensaje al texto acumulado (solo texto ACEPTADO para análisis sensorial)
+        evaluation.accumulated_text = '\n'.join(filter(None, [evaluation.accumulated_text.strip(), cleaned_message])).strip()
+
+        #5. Marca la respuesta inicial (ya garantizado que el turno no es comparativo)
+        if not evaluation.initial_response_text:
+            evaluation.initial_response_text = cleaned_message
+
+        covered_modalities = ModalityCoverageService.covered_modalities_from_latest(evaluation)
+        # Capture previous bot question before FlowDecisionEngine overwrites next_question
+        previous_bot_question = evaluation.next_question
 
         # 6. Llama al analizador
         try:
@@ -696,12 +940,6 @@ class DialogueService:
         # 7b. Guard: rechaza mention_text que sea texto de la pregunta del bot (alucinación del LLM)
         analysis = _sanitize_bot_text_from_mentions(analysis, previous_bot_question)
 
-        # 7c. Suppress is_vague from LLM for directed modality-question turns.
-        # Responses to "¿te gusta?" are valid short answers — marking them vague is wrong
-        # and would pollute the persisted analysis with misleading vagueness flags.
-        if evaluation.current_state == EvaluationState.MODALITY_QUESTION.value:
-            analysis = analysis.model_copy(update={'is_vague': False})
-
         #8. Fusión contextual cuando la pregunta era dirigida a una modalidad
         if evaluation.current_state == EvaluationState.MODALITY_QUESTION.value and evaluation.current_modality:
             analysis = _apply_modality_context(
@@ -716,7 +954,14 @@ class DialogueService:
 
         # 8b. Deterministic valuation fallback: fills empty valuation_text when LLM missed it.
         # Only acts when mention+descriptor are present. Uses literal text, never invents.
-        analysis = _apply_valuation_fallback(analysis, evaluation.accumulated_text)
+        # During a directed modality question, restrict it to the current modality so a
+        # valuation answer about one modality cannot fill another modality's valuation.
+        _fallback_only = (
+            evaluation.current_modality
+            if evaluation.current_state == EvaluationState.MODALITY_QUESTION.value
+            else None
+        )
+        analysis = _apply_valuation_fallback(analysis, evaluation.accumulated_text, only_modality=_fallback_only)
         analysis = _normalized_analysis(analysis)
 
         # 8c. Comparison guard: force has_comparison=True when the LLM missed an obvious marker.
@@ -731,9 +976,26 @@ class DialogueService:
             analysis = _reset_modalities_to_empty(analysis)
             analysis = _normalized_analysis(analysis)
 
-        #9. Aplica detección determinista de vaguedad (solo fuera de preguntas dirigidas)
-        if evaluation.current_state != EvaluationState.MODALITY_QUESTION.value and _looks_clearly_vague(cleaned_message):
-            analysis = analysis.model_copy(update={'is_vague': True})
+        #9. Vaguedad determinista en backend (se ignora por completo el is_vague del LLM).
+        # Se calcula tras consolidar/normalizar, cuando is_complete por modalidad ya es definitivo.
+        # Significa: la respuesta inicial no cubre suficientes modalidades sensoriales completas.
+        analysis = analysis.model_copy(update={
+            'is_vague': _compute_is_vague_from_coverage(
+                analysis_scope=analysis_scope,
+                current_state=evaluation.current_state,
+                analysis=analysis,
+            )
+        })
+
+        # 9b. Consolidación (solo MODALITY_QUESTION): únicamente la modalidad actual puede
+        # cambiar este turno; las demás se restauran desde su mejor valor persistido, de modo
+        # que el LLM no puede borrar ni reabrir una modalidad ya cubierta, y la información
+        # nueva que devuelva para otra modalidad se ignora en este modo. INITIAL es global.
+        if evaluation.current_state == EvaluationState.MODALITY_QUESTION.value and evaluation.current_modality:
+            analysis = _consolidate_modalities_for_modality_question(
+                evaluation, analysis, evaluation.current_modality
+            )
+            analysis = _normalized_analysis(analysis)
 
         #10. Llama al FlowDecisionEngine
         effective_next_action, bot_message, next_step = self.flow_engine.apply(db, evaluation, analysis, covered_modalities)
@@ -769,34 +1031,21 @@ class DialogueService:
     async def finalize_evaluation(self, db: Session, evaluation: SampleEvaluation, final_analysis: AnalysisResult | None = None) -> None:
         if evaluation.status == EvaluationStatus.COMPLETED.value:
             return
-        resolved_final_analysis = final_analysis.model_copy(update={'analysis_scope': AnalysisScope.FINAL.value}) if final_analysis is not None else None
-        if resolved_final_analysis is None:
-            try:
-                resolved_final_analysis = await self.analyzer.analyze(
-                    analysis_scope=AnalysisScope.FINAL.value,
-                    current_state=evaluation.current_state,
-                    current_modality=evaluation.current_modality,
-                    user_last_message=evaluation.accumulated_text,
-                    accumulated_text=evaluation.accumulated_text,
-                    covered_modalities=ModalityCoverageService.covered_modalities_from_latest(evaluation),
-                    vague_retry_count=evaluation.vague_retry_count,
-                    comparison_retry_count=evaluation.comparison_retry_count,
-                )
-                resolved_final_analysis = _normalized_analysis(resolved_final_analysis)
-            except AnalyzerUnavailableError as exc:
-                logger.exception('Final analyzer unavailable, closing evaluation with latest persisted analysis: %s', exc)
-                resolved_final_analysis = None
-        if resolved_final_analysis is not None:
-            self.analysis_persistence.persist_analysis(
-                db=db,
-                evaluation=evaluation,
-                analyzer_provider=self.analyzer.provider_name,
-                analyzer_model=self.analyzer.model_name,
-                prompt_version=self.analyzer.prompt_version,
-                source_turn_id=None,
-                analysis=resolved_final_analysis,
-                effective_next_action='CLOSE_SAMPLE',
-            )
+        # FINAL is a CONSOLIDATION of already-validated data — never a new global LLM pass.
+        # It combines the best persisted result per modality with the (already consolidated)
+        # closing-turn analysis, so it cannot blank complete modalities nor re-interpret the
+        # whole conversation. A FINAL is always persisted so the structured export keeps working.
+        resolved_final_analysis = _build_consolidated_final_analysis(evaluation, final_analysis)
+        self.analysis_persistence.persist_analysis(
+            db=db,
+            evaluation=evaluation,
+            analyzer_provider=self.analyzer.provider_name,
+            analyzer_model=self.analyzer.model_name,
+            prompt_version=self.analyzer.prompt_version,
+            source_turn_id=None,
+            analysis=resolved_final_analysis,
+            effective_next_action='CLOSE_SAMPLE',
+        )
         evaluation.status = EvaluationStatus.COMPLETED.value
         evaluation.current_state = EvaluationState.SAMPLE_COMPLETED.value
         evaluation.current_modality = None
